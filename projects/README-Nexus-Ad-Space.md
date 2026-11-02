@@ -1,10 +1,10 @@
 # Nexus Ad Space starter (working title)
 
-This branch carries an isolated Tauri 2 + Vite starter for a new advertising-space app. It does not replace or modify the Nexus Store project already on `main`.
+This pull request establishes an isolated project record for the new Tauri 2 + Vite advertising app. It does not replace or modify the Nexus Store project already on `main`.
 
-## Source package
+## Starter scope
 
-Extract `Nexus-Ad-Space-0.1.0.tar.gz` to work with the complete project. The source contains:
+The locally supplied source archive contains:
 - persistent left navigation and a central searchable ad feed;
 - image, video, and text placement preview cards;
 - category, format, and saved-placement filters;
@@ -12,11 +12,11 @@ Extract `Nexus-Ad-Space-0.1.0.tar.gz` to work with the complete project. The sou
 - an SVG-first app mark;
 - separate ad-provider and Google desktop OAuth configuration files.
 
-## Current integration state
+## Integration state
 
 The ad vendor is intentionally unselected. Preview cards are shown until a provider endpoint is configured. Google OAuth is staged but disabled; a Desktop OAuth client ID and native PKCE loopback callback/token handling are still required. Do not place a client secret in the distributed app.
 
-Exact brand palette hex codes and final app name remain provisional. See the project README and docs/INTEGRATIONS.md inside the archive.
+Exact brand palette hex codes and final app name remain provisional. The complete starter source is provided separately as the local project archive in this conversation; it is not included as a binary in this branch.
 
 ## Local validation
 
