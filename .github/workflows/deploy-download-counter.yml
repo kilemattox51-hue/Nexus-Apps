@@ -18,11 +18,11 @@ jobs:
       - name: Deploy Worker and set its GitHub credential
         uses: cloudflare/wrangler-action@v3
         with:
-          apiToken: \${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: backend/cloudflare-worker
           wranglerVersion: "4"
           secrets: |
             GITHUB_TOKEN
         env:
-          GITHUB_TOKEN: \${{ secrets.NEXUS_APPS_GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.NEXUS_APPS_GITHUB_TOKEN }}
