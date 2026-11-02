@@ -40,7 +40,7 @@ function fromBase64(value) {
 function apiHeaders(env) {
   return {
     "Accept": "application/vnd.github+json",
-    "Authorization": \`Bearer \${env.GITHUB_TOKEN}\`,
+    "Authorization": "Bearer " + env.GITHUB_TOKEN,
     "X-GitHub-Api-Version": API_VERSION,
     "User-Agent": "Nexus-Store-Download-Counter",
     "Cache-Control": "no-cache",
@@ -50,24 +50,22 @@ function target(env) {
   const owner = String(env.GITHUB_OWNER || "").trim();
   const repo = String(env.GITHUB_REPO || "").trim();
   const branch = String(env.GITHUB_BRANCH || "main").trim();
-  const path = String(env.GITHUB_FILE || "downloads.json").trim().replace(/^\\/+|\\/+$/g, "");
+  const path = String(env.GITHUB_FILE || "downloads.json").trim().replace(/^\/+|\/+$/g, "");
   const segments = path.split("/");
   if (!owner || !repo || !/^[A-Za-z0-9_.-]+$/.test(owner) || !/^[A-Za-z0-9_.-]+$/.test(repo)
       || !branch || segments.some(s => !s || s === "." || s === "..")) throw new Error("Worker repository settings are invalid.");
   const encodedPath = segments.map(encodeURIComponent).join("/");
-  return { branch, url: \`https://api.github.com/repos/\${encodeURIComponent(owner)}/\${encodeURIComponent(repo)}/contents/\${encodedPath}\` };
+  return { branch, url: "https://api.github.com/repos/" + encodeURIComponent(owner) + "/" + encodeURIComponent(repo) + "/contents/" + encodedPath };
 }
 async function readCounter(env, file) {
-  const response = await fetch(\`\${file.url}?ref=\${encodeURIComponent(file.branch)}\`, { headers: apiHeaders(env), cache: "no-store" });
+  const response = await fetch(file.url + "?ref=" + encodeURIComponent(file.branch), { headers: apiHeaders(env), cache: "no-store" });
   if (response.status === 404) return { sha: null, data: { schemaVersion: 1, updatedAt: null, apps: {}, recentEvents: [] } };
-  if (!response.ok) throw new Error(\`GitHub read failed (\${response.status}).\`);
+  if (!response.ok) throw new Error("GitHub read failed (" + response.status + ").");
   const record = await response.json();
   const data = JSON.parse(fromBase64(record.content));
   if (!data || typeof data !== "object" || Array.isArray(data)) throw new Error("GitHub downloads.json is not a JSON object.");
   if (!data.apps || typeof data.apps !== "object" || Array.isArray(data.apps)) data.apps = {};
   if (!Array.isArray(data.recentEvents)) data.recentEvents = [];
-  // Preserve the existing downloads.json schema while ensuring old malformed
-  // entries cannot interfere with event idempotency.
   data.recentEvents = [...new Set(data.recentEvents.filter(value => typeof value === "string" && EVENT_ID_RE.test(value)))];
   return { sha: record.sha, data };
 }
@@ -87,20 +85,17 @@ async function increment(env, appId, eventId) {
     const data = current.data;
     const rawPrevious = data.apps[appId] ?? 0;
     const previous = Number(rawPrevious);
-    if (!Number.isSafeInteger(previous) || previous < 0) throw new Error(\`The stored count for \${appId} is not a non-negative safe integer.\`);
+    if (!Number.isSafeInteger(previous) || previous < 0) throw new Error("The stored count for " + appId + " is not a non-negative safe integer.");
     if (data.recentEvents.includes(eventId)) {
       return { app_id: appId, event_id: eventId, count: previous, duplicate: true };
     }
-
     data.apps[appId] = previous + 1;
     data.schemaVersion = 1;
     data.updatedAt = new Date().toISOString();
-    // Do not truncate: an event that has been acknowledged must remain
-    // idempotent if a client retries months later after losing its response.
     data.recentEvents.push(eventId);
     const body = {
-      message: \`chore(store): record download for \${appId}\`,
-      content: toBase64(JSON.stringify(data, null, 2) + "\\n"),
+      message: "chore(store): record download for " + appId,
+      content: toBase64(JSON.stringify(data, null, 2) + "\n"),
       branch: file.branch,
       ...(current.sha ? { sha: current.sha } : {}),
     };
@@ -110,12 +105,9 @@ async function increment(env, appId, eventId) {
       body: JSON.stringify(body),
     });
     if (response.ok) return { app_id: appId, event_id: eventId, count: data.apps[appId], duplicate: false };
-    // GitHub's Contents API uses the file SHA for optimistic concurrency.
-    // A conflict is retried from a fresh read, which also catches a concurrent
-    // request for this exact same event ID before it can increment twice.
     if (![409, 422].includes(response.status)) {
       const detail = await response.text();
-      throw new Error(\`GitHub write failed (\${response.status}): \${detail.slice(0, 240)}\`);
+      throw new Error("GitHub write failed (" + response.status + "): " + detail.slice(0, 240));
     }
   }
   throw new Error("The GitHub counter file changed repeatedly. Please retry the request.");
@@ -130,21 +122,18 @@ export default {
     if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
     if (!["GET", "POST"].includes(request.method)) return json({ error: "Method not allowed." }, 405, cors);
     if (!env.GITHUB_TOKEN) return json({ error: "The counter service has no GitHub token configured." }, 503, cors);
-
     if (url.pathname === "/counts" && request.method === "GET") {
       try { return json(await getCounts(env), 200, cors); }
-      catch (error) { return json({ error: error?.message || "Counter read failed." }, 502, cors); }
+      catch (error) { return json({ error: error && error.message ? error.message : "Counter read failed." }, 502, cors); }
     }
     if (url.pathname !== "/increment" || request.method !== "POST") return json({ error: "Not found." }, 404, cors);
-
     let body;
     try { body = await request.json(); } catch { return json({ error: "Expected a JSON request body." }, 400, cors); }
-    const appId = String(body?.app_id || "");
-    const eventId = String(body?.event_id || "");
+    const appId = String(body && body.app_id || "");
+    const eventId = String(body && body.event_id || "");
     if (!APP_ID_RE.test(appId)) return json({ error: "Invalid app_id." }, 400, cors);
     if (!EVENT_ID_RE.test(eventId)) return json({ error: "Invalid event_id." }, 400, cors);
-
     try { return json(await increment(env, appId, eventId), 200, cors); }
-    catch (error) { return json({ error: error?.message || "Counter update failed." }, 502, cors); }
+    catch (error) { return json({ error: error && error.message ? error.message : "Counter update failed." }, 502, cors); }
   },
 };
