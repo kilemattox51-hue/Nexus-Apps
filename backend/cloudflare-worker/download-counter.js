@@ -76,12 +76,20 @@ async function getCounts(env) {
     updatedAt: current.data.updatedAt || null,
     apps: current.data.apps,
     recentEvents: current.data.recentEvents,
+    bootstrapRequired: !current.sha,
   };
 }
 async function increment(env, appId, eventId) {
   const file = target(env);
   for (let attempt = 0; attempt < 8; attempt++) {
     const current = await readCounter(env, file);
+    if (!current.sha) {
+      return {
+        _httpStatus: 409,
+        bootstrap_required: true,
+        error: "downloads.json is missing. Create it with the confirmed historical totals (or an explicit empty baseline) before accepting downloads.",
+      };
+    }
     const data = current.data;
     const rawPrevious = data.apps[appId] ?? 0;
     const previous = Number(rawPrevious);
@@ -133,7 +141,11 @@ export default {
     const eventId = String(body && body.event_id || "");
     if (!APP_ID_RE.test(appId)) return json({ error: "Invalid app_id." }, 400, cors);
     if (!EVENT_ID_RE.test(eventId)) return json({ error: "Invalid event_id." }, 400, cors);
-    try { return json(await increment(env, appId, eventId), 200, cors); }
-    catch (error) { return json({ error: error && error.message ? error.message : "Counter update failed." }, 502, cors); }
+    try {
+      const result = await increment(env, appId, eventId);
+      const status = result._httpStatus || 200;
+      delete result._httpStatus;
+      return json(result, status, cors);
+    } catch (error) { return json({ error: error && error.message ? error.message : "Counter update failed." }, 502, cors); }
   },
 };
