@@ -1,14 +1,23 @@
-# Nexus Store download counter Worker
+# GitHub-backed Nexus Store download counter
 
-This folder contains the Cloudflare Worker that owns download-count writes. The desktop app never receives a GitHub token. The Worker stores it as a Cloudflare Worker Secret named GITHUB_TOKEN.
+The desktop app sends one event per successful download/install action to this Worker. The Worker keeps the GitHub token server-side, reads the latest downloads.json, writes the increment with the current Git blob SHA, and returns the confirmed per-app total.
 
-## Current repository state and count migration
+## Repository state and baseline migration
 
-The catalog repository is kilemattox51-hue/Nexus-Apps, branch main, counter path downloads.json.
+The catalog settings are:
+- Owner: kilemattox51-hue
+- Repository: Nexus-Apps
+- Branch: main
+- Counter file: downloads.json at the repository root
 
-At the time this setup was prepared, that repository did not contain downloads.json, and its Git history had no earlier version of that file. The project archive contains only an empty starter template. Therefore, there is no authoritative shared count history to import automatically.
+The connected repository was inspected before setup. It currently contains three app ZIPs and no downloads.json. The repository's commit history also has no earlier downloads.json version. The supplied source archive has only an empty starter template, so historical totals cannot be recovered from GitHub.
 
-**Before the first real download is recorded, seed the root downloads.json with the confirmed historical counts if they must be retained.** Use this format, replacing the sample key and value with app IDs and exact counts that can be verified:
+The Worker is deliberately protected against resetting a cached count. While downloads.json is missing:
+- GET /counts returns bootstrapRequired: true, an empty apps object, and no-store headers.
+- The frontend preserves its existing local count cache and pending event queue.
+- POST /increment returns HTTP 409 with bootstrap_required: true. It does not create a zero baseline or acknowledge the event.
+
+Before accepting downloads, create downloads.json in the root of Nexus-Apps with confirmed historical totals. Use this format, replacing the sample app key and count with verified values:
 
     {
       "schemaVersion": 1,
@@ -19,46 +28,42 @@ At the time this setup was prepared, that repository did not contain downloads.j
       "recentEvents": []
     }
 
-Do not seed guessed values. Do not create an empty zero-count file just to make it exist: doing so could replace counts that exist only in a desktop installation's local cache. If no historical totals can be recovered, the first accepted event will initialize a new file from zero.
+Do not seed guessed values. If you confirm there are no historical totals to retain, create the same file with "apps": {} as an explicit zero baseline. The Worker will not assume an absent file means zero.
 
-## One-time GitHub and Cloudflare setup
+## GitHub and Cloudflare setup
 
 Create these three repository secrets in Nexus-Apps → Settings → Secrets and variables → Actions:
 
 | Secret | Value |
 | --- | --- |
-| CLOUDFLARE_API_TOKEN | Cloudflare API token scoped to the account, using the Edit Cloudflare Workers permission |
+| CLOUDFLARE_API_TOKEN | Cloudflare API token scoped to the account with Edit Cloudflare Workers permission |
 | CLOUDFLARE_ACCOUNT_ID | The Cloudflare account ID where the Worker should be deployed |
-| NEXUS_APPS_GITHUB_TOKEN | Fine-grained GitHub token restricted to this Nexus-Apps repository with Contents: Read and write |
+| NEXUS_APPS_GITHUB_TOKEN | Fine-grained GitHub token restricted to Nexus-Apps with Contents: Read and write |
 
-Neither token belongs in this repository or in the desktop application. The workflow maps NEXUS_APPS_GITHUB_TOKEN to a Cloudflare Worker Secret named GITHUB_TOKEN.
+Neither token belongs in the repository or desktop application. The workflow maps NEXUS_APPS_GITHUB_TOKEN to a Cloudflare Worker Secret named GITHUB_TOKEN.
 
-After adding the secrets, open Actions → Deploy Nexus Store download counter → Run workflow. The workflow deploys nexus-store-download-counter and installs its server-side GitHub token. The action output includes the deployed Worker URL.
+After adding the secrets, open Actions → Deploy Nexus Store download counter → Run workflow. The manual-only workflow deploys nexus-store-download-counter and installs its server-side GitHub token. The action output includes the deployed Worker URL.
 
-The workflow is manual-only. It does not deploy on every catalog change.
+The workflow does not run on ordinary catalog changes.
 
-## Configure the desktop application
+## Configure Nexus Store
 
-Copy the exact deployed workers.dev URL from the successful workflow output. In the desktop app's config.js, set:
-
-    counterApiUrl: "https://YOUR-DEPLOYED-WORKER-URL",
-
-Use the exact URL shown by Cloudflare, without a trailing slash or a /counts or /increment suffix. Keep the GitHub token out of config.js, rebuild the desktop app, and distribute the updated build.
+Copy the exact deployed workers.dev URL from the successful workflow output. In the desktop app config.js, set counterApiUrl to that exact URL, without a trailing slash and without /counts or /increment. Keep the GitHub token out of config.js, rebuild the desktop app, and distribute the updated build.
 
 ## API
 
-- GET /counts returns the authoritative app totals and acknowledged event IDs with Cache-Control: no-store.
-- POST /increment accepts {"app_id":"your-app-id","event_id":"a-stable-event-id"}.
-- Acknowledged event IDs are retained indefinitely. A retry with the same ID returns the previous count and does not increment again.
+- GET /counts returns authoritative app totals and acknowledged event IDs with Cache-Control: no-store. If the ledger is absent, it returns bootstrapRequired: true.
+- POST /increment accepts an app_id and stable event_id. It returns the app count and whether the event was a duplicate.
+- Acknowledged event IDs are retained indefinitely. A retry with the same ID does not increment again.
 - Concurrent writes reread the GitHub file after SHA conflicts and retry, preventing lost updates.
 - The frontend sends events serially, removes only acknowledged events, and retains the same event ID across retries.
 
 ## Live verification
 
-After deploying the Worker and configuring counterApiUrl, run verify-counter-live.mjs from the Nexus Store source tree. It creates one test entry under nexus-counter-live-test and verifies that replaying the same ID increments the total only once.
+After deployment and config.js setup, run verify-counter-live.mjs from the Nexus Store source tree. It creates a test entry under nexus-counter-live-test and verifies that replaying the same ID increments only once.
 
-The ordinary frontend and Worker test suites are mocked tests; they do not write to the real GitHub repository.
+The normal frontend and Worker test suites use mocks; they do not write to the live GitHub repository.
 
 ## Operational note
 
-The endpoint accepts requests from the desktop client and does not expose its GitHub write token. CORS is not authentication. Before a public launch, configure Cloudflare rate limiting for POST /increment and monitor Worker logs. The retained event ledger grows over time; a transactional Cloudflare D1 ledger is the better long-term option.
+The endpoint is callable by desktop clients and never exposes its GitHub write token. CORS is not authentication. Configure Cloudflare rate limiting for POST /increment and monitor Worker logs before public launch. The retained event ledger grows over time; a transactional Cloudflare D1 ledger is a better long-term fit for high-volume usage.
